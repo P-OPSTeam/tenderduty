@@ -74,7 +74,7 @@ func (cc *ChainConfig) GetValInfo(first bool) (err error) {
 	// Fetch info from /cosmos.staking.v1beta1.Query/Validator
 	// it's easier to ask people to provide valoper since it's readily available on
 	// explorers, so make it easy and lookup the consensus key for them.
-	conspub, moniker, jailed, bonded, err := getVal(ctx, cc.client, cc.ValAddress)
+	conspub, moniker, jailed, bonded, err := getVal(ctx, cc.client, cc.ValAddress, cc)
 	if err != nil {
 		return
 	}
@@ -177,7 +177,7 @@ func (cc *ChainConfig) GetValInfo(first bool) (err error) {
 }
 
 // getVal returns the public key, moniker, and if the validator is jailed.
-func getVal(ctx context.Context, client *rpchttp.HTTP, valoper string) (pub []byte, moniker string, jailed, bonded bool, err error) {
+func getVal(ctx context.Context, client *rpchttp.HTTP, valoper string, cc *ChainConfig) (pub []byte, moniker string, jailed, bonded bool, err error) {
 	if strings.Contains(valoper, "valcons") {
 		_, bz, err := bech32.DecodeAndConvert(valoper)
 		if err != nil {
@@ -185,7 +185,16 @@ func getVal(ctx context.Context, client *rpchttp.HTTP, valoper string) (pub []by
 		}
 
 		hexAddress := fmt.Sprintf("%X", bz)
-		return ToBytes(hexAddress), valoper, false, true, nil
+
+		// check if it is jailed based on the votepower
+		jailed := false
+		votingPower, err := cc.getValidatorVotingPower(ctx, hexAddress)
+		if err == nil {
+			if votingPower == "0" {
+				jailed = true
+			}
+		}
+		return ToBytes(hexAddress), valoper, jailed, true, nil
 	}
 
 	q := staking.QueryValidatorRequest{

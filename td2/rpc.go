@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"time"
 
 	dash "github.com/blockpane/tenderduty/v2/td2/dashboard"
@@ -319,4 +320,93 @@ func getStatusWithEndpoint(ctx context.Context, u string) (string, bool, error) 
 		return "", false, err
 	}
 	return status.Result.NodeInfo.Network, status.Result.SyncInfo.CatchingUp, nil
+}
+
+func (cc *ChainConfig) getValidatorVotingPower(ctx context.Context, valhex string) (string, error) {
+	// Get the URL
+	u := cc.Nodes[0].Url
+
+	// Parse the URL
+	parsedURL, err := url.Parse(u)
+	if err != nil {
+		return "", err
+	}
+
+	// Check if the scheme is 'tcp' and modify to 'http'
+	if parsedURL.Scheme == "tcp" {
+		parsedURL.Scheme = "http"
+	}
+	page := 1
+	var votingPower string
+	totalCount := 0
+
+	for {
+		queryParams := url.Values{}
+		queryParams.Add("per_page", "100")
+		queryParams.Add("page", strconv.Itoa(page))
+
+		queryPath := fmt.Sprintf("%s/validators?%s", parsedURL.String(), queryParams.Encode())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, queryPath, nil)
+		if err != nil {
+			return "", err
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
+
+		type Validatorset struct {
+			JsonRPC string `json:"jsonrpc"`
+			ID      int    `json:"id"`
+			Result  struct {
+				Validators  []struct {
+					Address          string `json:"address"`
+					PubKey          struct {
+						Type  string `json:"type"`
+						Value string `json:"value"`
+					} `json:"pub_key"`
+					VotingPower      string `json:"voting_power"`
+					ProposerPriority string `json:"proposer_priority"`
+				} `json:"validators"`
+				Count string `json:"count"`
+				Total string `json:"total"`
+			} `json:"result"`
+		}
+		var validatorset Validatorset
+		if err := json.Unmarshal(b, &validatorset); err != nil {
+			return "", err
+		}
+
+		for _, validator := range validatorset.Result.Validators {
+			if validator.Address == valhex {
+				votingPower = validator.VotingPower
+				return votingPower, nil
+			}
+		}
+
+		count, err := strconv.Atoi(validatorset.Result.Count)
+		if err != nil {
+			return "", err // Handle conversion error
+		}
+
+		total, err := strconv.Atoi(validatorset.Result.Total)
+		if err != nil {
+			return "", err // Handle conversion error
+		}
+
+		totalCount += count
+		if totalCount >= total {
+			break
+		}
+		page++
+	}
+	
+	return "", nil
 }
